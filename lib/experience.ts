@@ -7,71 +7,35 @@ export type ExperienceFilter =
   | "2-3"
   | "3-plus";
 
-function getExperienceYears(job: Job) {
-  if (
-    typeof job.exp_min !== "number" ||
-    !Number.isFinite(job.exp_min)
-  ) {
+function experienceRange(job: Job) {
+  if (typeof job.exp_min !== "number" || !Number.isFinite(job.exp_min)) {
     return null;
   }
 
-  const unit = job.exp_unit?.toLowerCase() || "years";
-  const divisor = unit.includes("month") ? 12 : 1;
+  const divisor = job.exp_unit?.toLowerCase().includes("month") ? 12 : 1;
   const min = job.exp_min / divisor;
-  const max =
-    typeof job.exp_max === "number" &&
-    Number.isFinite(job.exp_max)
-      ? job.exp_max / divisor
-      : min;
+  const max = typeof job.exp_max === "number" && Number.isFinite(job.exp_max)
+    ? job.exp_max / divisor
+    : min;
 
-  if (min < 0 || max < min) return null;
-
-  return { min, max };
+  return min >= 0 && max >= min ? { min, max } : null;
 }
 
-export function matchesExperienceFilter(
-  job: Job,
-  filter: ExperienceFilter
-) {
-  const experience = getExperienceYears(job);
+export function matchesExperienceFilter(job: Job, filter: ExperienceFilter) {
+  const range = experienceRange(job);
+  if (!range) return false;
+  if (filter === "fresher") return range.min === 0;
+  if (filter === "3-plus") return range.max >= 3;
 
-  if (!experience) return false;
-
-  if (filter === "fresher") {
-    return experience.min === 0;
-  }
-
-  if (filter === "3-plus") {
-    return experience.max >= 3;
-  }
-
-  const ranges: Record<
-    Exclude<
-      ExperienceFilter,
-      "all" | "fresher" | "3-plus"
-    >,
-    [number, number]
-  > = {
+  const bounds: Record<Exclude<ExperienceFilter, "fresher" | "3-plus">, [number, number]> = {
     "0-1": [0, 1],
     "1-2": [1, 2],
     "2-3": [2, 3],
   };
-  const [rangeMin, rangeMax] = ranges[filter];
-
-  return (
-    experience.min <= rangeMax &&
-    experience.max >= rangeMin
-  );
+  const [min, max] = bounds[filter];
+  return range.min <= max && range.max >= min;
 }
 
-export function matchesExperienceFilters(
-  job: Job,
-  filters: readonly ExperienceFilter[]
-) {
-  return (
-    filters.length === 0 ||
-    filters.some((filter) =>
-      matchesExperienceFilter(job, filter)
-    )
-  );
+export function matchesExperienceFilters(job: Job, filters: readonly ExperienceFilter[]) {
+  return filters.length === 0 || filters.some((filter) => matchesExperienceFilter(job, filter));
 }
