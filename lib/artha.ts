@@ -3,6 +3,16 @@ import type { Job } from "./types";
 const ARTHA_BASE_URL =
   "https://api-india.artha.link/api/v1";
 
+export class ArthaApiError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ArthaApiError";
+    this.status = status;
+  }
+}
+
 type ArthaJobsResponse = {
   success: boolean;
   message?: string;
@@ -68,9 +78,10 @@ export async function getArthaJobs(
     (await response.json()) as ArthaJobsResponse;
 
   if (!response.ok || !result.success) {
-    throw new Error(
+    throw new ArthaApiError(
       result.error?.message ||
-        `Artha API request failed (${response.status})`
+        `Artha API request failed (${response.status})`,
+      response.status
     );
   }
 

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getArthaJobs } from "@/lib/artha";
+import { ArthaApiError, getArthaJobs } from "@/lib/artha";
 
 export async function GET(request: NextRequest) {
   try {
@@ -27,7 +27,8 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(result);
   } catch (error) {
-    console.error("Artha API error:", error);
+    const status =
+      error instanceof ArthaApiError ? error.status : 500;
 
     return NextResponse.json(
       {
@@ -40,7 +41,7 @@ export async function GET(request: NextRequest) {
               : "Unable to fetch jobs.",
         },
       },
-      { status: 500 }
+      { status }
     );
   }
 }

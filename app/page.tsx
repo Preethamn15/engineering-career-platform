@@ -1,7 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import type { Job } from "@/lib/types";
+import {
+  matchesExperienceFilters,
+  type ExperienceFilter,
+} from "@/lib/experience";
 
 type FilterOption = {
   value: string;
@@ -11,6 +20,21 @@ type FilterOption = {
 type FiltersResponse = {
   success?: boolean;
   data?: Record<string, unknown>;
+};
+
+type JobsResponse = {
+  success?: boolean;
+  data?: {
+    items?: Job[];
+    total?: number;
+    limit?: number;
+    offset?: number;
+    has_more?: boolean;
+  };
+  error?: {
+    code?: string;
+    message?: string;
+  };
 };
 
 const STORAGE_SAVED = "artha-job-finder-saved";
@@ -162,9 +186,21 @@ function getSalary(job: Job) {
   return `${currency} ${job.salary_min.toLocaleString()}+`;
 }
 
+function getExperienceFilterLabel(filter: ExperienceFilter) {
+  return {
+    fresher: "Fresher / 0 Years",
+    "0-1": "0–1 Years",
+    "1-2": "1–2 Years",
+    "2-3": "2–3 Years",
+    "3-plus": "3+ Years",
+  }[filter];
+}
+
 export default function Home() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -178,6 +214,10 @@ export default function Home() {
   const [category, setCategory] = useState("");
   const [jobType, setJobType] = useState("");
   const [workMode, setWorkMode] = useState("");
+  const [selectedExperience, setSelectedExperience] =
+    useState<ExperienceFilter[]>([]);
+  const [showExperienceOptions, setShowExperienceOptions] =
+    useState(false);
   const [sortBy, setSortBy] = useState("newest");
 
   const [saved, setSaved] = useState<string[]>([]);
@@ -196,6 +236,8 @@ export default function Home() {
 
   const [filtersLoading, setFiltersLoading] =
     useState(true);
+  const [filtersError, setFiltersError] =
+    useState("");
 
   useEffect(() => {
     try {
@@ -208,11 +250,13 @@ export default function Home() {
       );
 
       if (savedJobs) {
-        setSaved(JSON.parse(savedJobs));
+        queueMicrotask(() => setSaved(JSON.parse(savedJobs)));
       }
 
       if (picks) {
-        setContentPicks(JSON.parse(picks));
+        queueMicrotask(() =>
+          setContentPicks(JSON.parse(picks))
+        );
       }
     } catch {
       // Ignore invalid localStorage data.
@@ -283,9 +327,10 @@ export default function Home() {
     [filterData]
   );
 
-  async function loadFilters() {
+  const loadFilters = useCallback(async () => {
     try {
       setFiltersLoading(true);
+      setFiltersError("");
 
       const response = await fetch(
         "/api/jobs/filters",
@@ -304,14 +349,17 @@ export default function Home() {
       }
 
       setFilterData(result.data);
-    } catch (err) {
-      console.error(err);
+    } catch {
+      setFilterData(undefined);
+      setFiltersError(
+        "Filter options are temporarily unavailable."
+      );
     } finally {
       setFiltersLoading(false);
     }
-  }
+  }, []);
 
-  async function loadJobs() {
+  const loadJobs = useCallback(async () => {
     try {
       setLoading(true);
       setError("");
@@ -319,7 +367,7 @@ export default function Home() {
       const params = new URLSearchParams();
 
       params.set("limit", "100");
-      params.set("offset", "0");
+      params.set("offset", String((page - 1) * 100));
 
       if (appliedSearch) {
         params.set("q", appliedSearch);
@@ -358,9 +406,21 @@ export default function Home() {
         }
       );
 
-      const result = await response.json();
+      const result = (await response.json()) as JobsResponse;
 
       if (!response.ok || !result.success) {
+        if (response.status === 401 || response.status === 403) {
+          throw new Error(
+            "The Artha API key is invalid or expired. Please check the server configuration."
+          );
+        }
+
+        if (response.status === 429) {
+          throw new Error(
+            "Artha is rate limiting requests. Please wait a moment and try again."
+          );
+        }
+
         throw new Error(
           result?.error?.message ||
             "Unable to fetch jobs."
@@ -379,10 +439,10 @@ export default function Home() {
           ? result.data.total
           : items.length
       );
+      setHasMore(result?.data?.has_more === true);
     } catch (err) {
-      console.error(err);
-
       setJobs([]);
+      setHasMore(false);
 
       setError(
         err instanceof Error
@@ -392,27 +452,31 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  }
-
-  useEffect(() => {
-    loadFilters();
-  }, []);
-
-  useEffect(() => {
-    loadJobs();
   }, [
     appliedSearch,
-    location,
-    state,
-    city,
     category,
+    city,
     jobType,
-    workMode,
+    location,
+    page,
     sortBy,
+    state,
+    workMode,
+  ]);
+
+  useEffect(() => {
+    queueMicrotask(() => void loadFilters());
+  }, [loadFilters]);
+
+  useEffect(() => {
+    queueMicrotask(() => void loadJobs());
+  }, [
+    loadJobs,
   ]);
 
   function performSearch() {
     setAppliedSearch(search.trim());
+    setPage(1);
     setActiveSection("all");
   }
 
@@ -425,7 +489,9 @@ export default function Home() {
     setCategory("");
     setJobType("");
     setWorkMode("");
+    setSelectedExperience([]);
     setSortBy("newest");
+    setPage(1);
     setActiveSection("all");
   }
 
@@ -445,36 +511,72 @@ export default function Home() {
     );
   }
 
+  const experienceFilteredJobs = useMemo(
+    () =>
+      jobs.filter((job) =>
+        matchesExperienceFilters(job, selectedExperience)
+      ),
+    [jobs, selectedExperience]
+  );
+
   const displayedJobs = useMemo(() => {
     if (activeSection === "saved") {
-      return jobs.filter((job) =>
+      return experienceFilteredJobs.filter((job) =>
         saved.includes(job.id)
       );
     }
 
     if (activeSection === "picks") {
-      return jobs.filter((job) =>
+      return experienceFilteredJobs.filter((job) =>
         contentPicks.includes(job.id)
       );
     }
 
-    return jobs;
-  }, [jobs, activeSection, saved, contentPicks]);
+    return experienceFilteredJobs;
+  }, [
+    experienceFilteredJobs,
+    activeSection,
+    saved,
+    contentPicks,
+  ]);
 
-  const freshCount = jobs.filter((job) =>
-    isFresh(job.posted_date)
-  ).length;
-
-  const internshipCount = jobs.filter(
+  const internshipCount = experienceFilteredJobs.filter(
     (job) =>
       job.job_type?.toLowerCase() ===
       "internship"
   ).length;
 
-  const remoteCount = jobs.filter(
+  const remoteCount = experienceFilteredJobs.filter(
     (job) =>
       job.work_mode?.toLowerCase() === "remote"
   ).length;
+
+  function selectFilter<T extends string>(
+    setter: (value: T) => void,
+    value: T
+  ) {
+    setter(value);
+    setPage(1);
+    setActiveSection("all");
+  }
+
+  function toggleExperienceFilter(filter: ExperienceFilter) {
+    setSelectedExperience((current) =>
+      current.includes(filter)
+        ? current.filter((item) => item !== filter)
+        : [...current, filter]
+    );
+    setPage(1);
+    setActiveSection("all");
+  }
+
+  const experienceOptions: ExperienceFilter[] = [
+    "fresher",
+    "0-1",
+    "1-2",
+    "2-3",
+    "3-plus",
+  ];
 
   return (
     <main className="min-h-screen bg-[#f6f7fb] text-[#111827]">
@@ -560,10 +662,10 @@ export default function Home() {
         <section className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
           {[
             ["Total Jobs", total],
-            ["Fresh Jobs", freshCount],
+            ["Current Results", displayedJobs.length],
             ["Internships", internshipCount],
             ["Remote Jobs", remoteCount],
-            ["Shortlisted", saved.length],
+            ["Saved Jobs", saved.length],
             ["Content Picks", contentPicks.length],
           ].map(([label, value]) => (
             <div
@@ -596,7 +698,7 @@ export default function Home() {
             <select
               value={location}
               onChange={(e) =>
-                setLocation(e.target.value)
+                selectFilter(setLocation, e.target.value)
               }
               className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none"
             >
@@ -617,7 +719,7 @@ export default function Home() {
             <select
               value={category}
               onChange={(e) =>
-                setCategory(e.target.value)
+                selectFilter(setCategory, e.target.value)
               }
               className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none"
             >
@@ -638,7 +740,7 @@ export default function Home() {
             <select
               value={jobType}
               onChange={(e) =>
-                setJobType(e.target.value)
+                selectFilter(setJobType, e.target.value)
               }
               className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none"
             >
@@ -659,7 +761,7 @@ export default function Home() {
             <select
               value={workMode}
               onChange={(e) =>
-                setWorkMode(e.target.value)
+                selectFilter(setWorkMode, e.target.value)
               }
               className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none"
             >
@@ -677,10 +779,46 @@ export default function Home() {
               ))}
             </select>
 
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() =>
+                  setShowExperienceOptions((current) => !current)
+                }
+                aria-expanded={showExperienceOptions}
+                className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none transition hover:border-gray-300"
+              >
+                {selectedExperience.length === 0
+                  ? "All Experience"
+                  : `Experience · ${selectedExperience.length}`}
+              </button>
+
+              {showExperienceOptions && (
+                <div className="absolute left-0 top-full z-20 mt-2 min-w-[220px] rounded-xl border border-gray-200 bg-white p-2 shadow-lg">
+                  {experienceOptions.map((option) => (
+                    <label
+                      key={option}
+                      className="flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedExperience.includes(option)}
+                        onChange={() =>
+                          toggleExperienceFilter(option)
+                        }
+                        className="h-4 w-4 accent-[#5145e5]"
+                      />
+                      {getExperienceFilterLabel(option)}
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <select
               value={sortBy}
               onChange={(e) =>
-                setSortBy(e.target.value)
+                selectFilter(setSortBy, e.target.value)
               }
               className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none"
             >
@@ -705,13 +843,24 @@ export default function Home() {
             </button>
           </div>
 
+          {selectedExperience.length > 0 && (
+            <div className="mt-3 rounded-xl bg-[#5145e5]/5 px-4 py-3 text-sm text-[#5145e5]">
+              Experience: {selectedExperience
+                .map(getExperienceFilterLabel)
+                .join(", ")}
+              <span className="ml-1 text-[#5145e5]/70">
+                · applied to the loaded Artha results
+              </span>
+            </div>
+          )}
+
           {/* ADVANCED FILTERS */}
           {showFilters && (
             <div className="mt-4 grid gap-3 border-t border-gray-100 pt-4 md:grid-cols-3">
               <select
                 value={state}
                 onChange={(e) =>
-                  setState(e.target.value)
+                  selectFilter(setState, e.target.value)
                 }
                 className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none"
               >
@@ -732,7 +881,7 @@ export default function Home() {
               <select
                 value={city}
                 onChange={(e) =>
-                  setCity(e.target.value)
+                  selectFilter(setCity, e.target.value)
                 }
                 className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none"
               >
@@ -753,7 +902,8 @@ export default function Home() {
               <div className="flex items-center rounded-xl bg-gray-50 px-4 text-sm text-gray-500">
                 {filtersLoading
                   ? "Loading Artha filters..."
-                  : "Filter options loaded from Artha"}
+                  : filtersError ||
+                    "Filter options loaded from Artha"}
               </div>
             </div>
           )}
@@ -1044,6 +1194,30 @@ export default function Home() {
                 })}
               </div>
             )}
+
+          {!loading && !error && activeSection === "all" && (
+            <div className="mt-7 flex items-center justify-between gap-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+              <button
+                onClick={() => setPage((current) => current - 1)}
+                disabled={page === 1}
+                className="rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-semibold text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Previous
+              </button>
+
+              <span className="text-sm font-medium text-gray-500">
+                Page {page}
+              </span>
+
+              <button
+                onClick={() => setPage((current) => current + 1)}
+                disabled={!hasMore}
+                className="rounded-xl bg-[#111827] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
+          )}
         </section>
       </div>
 

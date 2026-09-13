@@ -38,8 +38,6 @@ export async function GET() {
 
     return NextResponse.json(data);
   } catch (error) {
-    console.error("Artha filters error:", error);
-
     return NextResponse.json(
       {
         success: false,
