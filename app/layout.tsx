@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Artha Job Finder",
-  description: "Search live Artha opportunities and build your shortlist.",
+  title: "CareerRadar | Preetham.tech",
+  description: "Live opportunity intelligence by Preetham.tech.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
